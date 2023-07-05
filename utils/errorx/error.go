@@ -19,46 +19,51 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-package cmd
+
+package errorx
 
 import (
-	"strings"
+	"os"
+	"runtime/debug"
 
-	"github.com/spf13/cobra"
+	log "github.com/sirupsen/logrus"
 )
 
-var CMDS = []string{"sh", "bash"}
+const (
+	// ErrorSelectExit The selector is closed
+	ErrorSelectExit = 0
+	// ErrorSelectExit
+	ErrorConfigErr = 1
+	// ErrorAuthConfigErr
+	ErrorAuthConfigErr = 2
+	// ErrorBCSAuthConfigErr bcs auth config error
+	ErrorBCSAuthConfigErr = 3
+	// ErrorGetBCSUserProjErr get bcs project unknown error
+	ErrorGetBCSUserProjErr = 4
+	// ErrorGetBCSUserProj get bcs cluster proj unknown error
+	ErrorGetBCSUserClusterErr = 5
+	// ErrorUnknow Unexpected error, need to contact the developer
+	ErrorUnknow = 20
+)
 
-type ClusterCmd struct {
-	BaseCommand
-}
-
-func (cl *ClusterCmd) Init() {
-	cl.command = &cobra.Command{
-		Use:   "cluster",
-		Short: "Exec a command for a container incluster.",
-		Long:  "Exec a command for a container incluster.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cl.runCluster(cmd, args)
-		},
+// CheckError if error is not nil, call fatal.
+func CheckError(err error) {
+	if err != nil {
+		debug.PrintStack()
+		Fatal(ErrorUnknow, err)
 	}
-	cl.command.DisableFlagsInUseLine = true
 }
 
-func (cl ClusterCmd) runCluster(cmd *cobra.Command, args []string) error {
-	// call utils get pods
-	pods := ListAllPods()
-	selectpod := SelectUI(pods, "select a pod")
-	// pod: namespace/podname
-	namespace_pod := strings.Split(selectpod, "/")
-	namespace := namespace_pod[0]
-	podname := namespace_pod[1]
-	// call utils get container
-	containers := ListContainersByPod(namespace, podname)
-	selectcontainer := SelectUI(containers, "select a container")
-	// select command
-	selectcmd := SelectUI(CMDS, "select a cmd")
-	// build exec real command
-	err := ExecPodContainer(namespace, podname, selectcontainer, selectcmd)
-	return err
+func CheckErrorWithCode(err error, exitcode int) {
+	if err != nil {
+		Fatal(exitcode, err)
+	}
+}
+
+func Fatal(exitcode int, args ...interface{}) {
+	exitfunc := func() {
+		os.Exit(exitcode)
+	}
+	log.RegisterExitHandler(exitfunc)
+	log.Fatal(args...)
 }

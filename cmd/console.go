@@ -21,39 +21,44 @@
 // SOFTWARE.
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"strings"
 
-type Command interface {
-	Init()
-	CobraCmd() *cobra.Command
+	"github.com/spf13/cobra"
+)
+
+var CMDS = []string{"sh", "bash"}
+
+type ConsoleCmd struct {
+	BaseCommand
 }
 
-type BaseCommand struct {
-	command *cobra.Command
-}
-
-func (bc BaseCommand) Init() {
-}
-
-func (bc BaseCommand) CobraCmd() *cobra.Command {
-	return bc.command
-}
-
-func (bc *BaseCommand) AddCommands(children ...Command) {
-	for _, child := range children {
-		child.Init()
-		childCmd := child.CobraCmd()
-		bc.CobraCmd().AddCommand(childCmd)
+func (cl *ConsoleCmd) Init() {
+	cl.command = &cobra.Command{
+		Use:   "console",
+		Short: "Exec a command for a container incluster.",
+		Long:  "Exec a command for a container incluster.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cl.runConsole(cmd, args)
+		},
 	}
+	cl.command.DisableFlagsInUseLine = true
 }
 
-func NewBaseCommand() *BaseCommand {
-	cli := NewCli()
-	baseCmd := &BaseCommand{
-		command: cli.rootCmd,
-	}
-	baseCmd.AddCommands(&ConsoleCmd{})
-	baseCmd.AddCommands(&DownloadCmd{})
-	baseCmd.AddCommands(&UploadCmd{})
-	return baseCmd
+func (cl ConsoleCmd) runConsole(cmd *cobra.Command, args []string) error {
+	// call utils get pods
+	pods := ListAllPods()
+	selectpod := SelectUI(pods, "select a pod")
+	// pod: namespace/podname
+	namespace_pod := strings.Split(selectpod, "/")
+	namespace := namespace_pod[0]
+	podname := namespace_pod[1]
+	// call utils get container
+	containers := ListContainersByPod(namespace, podname)
+	selectcontainer := SelectUI(containers, "select a container")
+	// select command
+	selectcmd := SelectUI(CMDS, "select a cmd")
+	// build exec real command
+	err := ExecPodContainer(namespace, podname, selectcontainer, selectcmd)
+	return err
 }

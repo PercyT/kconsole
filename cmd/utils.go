@@ -26,12 +26,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"kconsole/config"
+	"kconsole/utils/bcs"
+	"kconsole/utils/errorx"
 	"log"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/manifoldco/promptui"
 	"github.com/pingcap/errors"
@@ -45,6 +49,11 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubectl/pkg/scheme"
+)
+
+var (
+	once      sync.Once
+	clientSet *kubernetes.Clientset = &kubernetes.Clientset{}
 )
 
 // ----
@@ -73,45 +82,105 @@ func PrintLogo() string {
 // kube utils
 // ----
 
+// defaultKubeConfig used to configure the kubeclient by ~/.kube/config
 func defaultKubeConfig() *rest.Config {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		panic(err.Error())
-	}
+	errorx.CheckError(err)
 
 	// 构建kubeconfig文件路径
 	kubeconfig := filepath.Join(home, ".kube", "config")
 
 	// 加载kubeconfig文件
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		panic(err.Error())
+	errorx.CheckError(err)
+
+	return config
+}
+
+func newKubeConfigForToken(host string, token string) *rest.Config {
+	config := &rest.Config{
+		Host:        host,
+		BearerToken: token,
 	}
 	return config
+}
+
+func newBcsConfig(clusterid string) *rest.Config {
+	kconsoleConfig := config.GetKconsoleConfig()
+	return newKubeConfigForToken(
+		fmt.Sprintf("%s/clusters/%s", kconsoleConfig.BCSHost, clusterid),
+		kconsoleConfig.BCSToken,
+	)
+}
+
+func bcsClientSet(clusterid string) *kubernetes.Clientset {
+	config := newBcsConfig(clusterid)
+	clientset, err := kubernetes.NewForConfig(config)
+	errorx.CheckError(err)
+	return clientset
 }
 
 func defaulClientSet() *kubernetes.Clientset {
 	config := defaultKubeConfig()
 	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
+	errorx.CheckError(err)
 	return clientset
 }
 
-func allPodList() *v1.PodList {
-	pods, err := defaulClientSet().CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		panic(err.Error())
+func getClientSet() *kubernetes.Clientset {
+	once.Do(func() {
+		c := config.GetKconsoleConfig()
+		switch c.Auth {
+		case config.LocalConfigAuth:
+			clientSet = defaulClientSet()
+		case config.BcsAuth:
+			// select cluster
+			clusterid := selectBCSCluster()
+			clientSet = bcsClientSet(clusterid)
+		}
+	})
+	return clientSet
+}
+
+func selectBCSCluster() (clusterid string) {
+	projs, err := bcs.UserBCSProjects(context.Background())
+	errorx.CheckErrorWithCode(err, errorx.ErrorGetBCSUserProjErr)
+	// build project list of []string
+	projnames := make([]string, 0)
+	// build name:id map for project
+	nameid := make(map[string]string, 0)
+	for _, proj := range projs.Data.Results {
+		projnames = append(projnames, proj.Name)
+		nameid[proj.Name] = proj.ProjectID
 	}
+	selectprojname := SelectUI(projnames, "select a bcs project")
+	selectprojid := nameid[selectprojname]
+	// ----
+	clusters, err := bcs.UserBCSCluster(context.Background(), selectprojid)
+	errorx.CheckErrorWithCode(err, errorx.ErrorGetBCSUserProjErr)
+	// ----
+	clusternames := make([]string, 0)
+	clusternameid := make(map[string]string, 0)
+	for _, cluster := range clusters.Data {
+		clusternames = append(clusternames, cluster.ClusterName)
+		clusternameid[cluster.ClusterName] = cluster.ClusterID
+	}
+	selectclustername := SelectUI(clusternames, "select a bcs cluster")
+	selectclusterid := clusternameid[selectclustername]
+	return selectclusterid
+}
+
+func allPodList() *v1.PodList {
+	pods, err := getClientSet().CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
+	errorx.CheckError(err)
+
 	return pods
 }
 
 func getPod(podname string, namespace string) (*v1.Pod, error) {
-	pod, err := defaulClientSet().CoreV1().Pods(namespace).Get(context.Background(), podname, metav1.GetOptions{})
-	if err != nil {
-		return nil, err
-	}
+	pod, err := getClientSet().CoreV1().Pods(namespace).Get(context.Background(), podname, metav1.GetOptions{})
+	errorx.CheckError(err)
+
 	return pod, nil
 }
 
@@ -126,9 +195,8 @@ func ListAllPods() []string {
 
 func ListContainersByPod(namespace string, podname string) (containers []string) {
 	pod, err := getPod(podname, namespace)
-	if err != nil {
-		panic(err.Error())
-	}
+	errorx.CheckError(err)
+
 	for _, container := range pod.Spec.Containers {
 		containers = append(containers, container.Name)
 	}
@@ -153,9 +221,8 @@ func SelectUI(data []string, title string) string {
 	}
 
 	_, result, err := prompt.Run()
-	if err != nil {
-		panic(err.Error())
-	}
+	errorx.CheckErrorWithCode(err, errorx.ErrorSelectExit)
+
 	return result
 }
 
@@ -189,7 +256,7 @@ func InputUI(title string, prefix string, defaultStr string) string {
 // ---
 
 func ExecPodContainer(namespace string, pod string, container string, command string) error {
-	clientset := defaulClientSet()
+	clientset := getClientSet()
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(namespace).
@@ -206,9 +273,8 @@ func ExecPodContainer(namespace string, pod string, container string, command st
 
 	// 创建执行器
 	executor, err := remotecommand.NewSPDYExecutor(defaultKubeConfig(), http.MethodPost, req.URL())
-	if err != nil {
-		return err
-	}
+	errorx.CheckError(err)
+
 	err = executor.StreamWithContext(context.Background(), remotecommand.StreamOptions{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
@@ -228,7 +294,7 @@ func ExecPodContainer(namespace string, pod string, container string, command st
 }
 
 func copyFromPod(namespace string, pod string, container string, srcPath string, destPath string) error {
-	clientset := defaulClientSet()
+	clientset := getClientSet()
 	reader, outStream := io.Pipe()
 	//todo some containers failed : tar: Refusing to write archive contents to terminal (missing -f option?) when execute `tar cf -` in container
 	cmdArr := []string{"tar", "cf", "-", srcPath}
@@ -270,7 +336,7 @@ func copyFromPod(namespace string, pod string, container string, srcPath string,
 }
 
 func copyToPod(namespace string, pod string, container string, srcPath string, destPath string) error {
-	clientset := defaulClientSet()
+	clientset := getClientSet()
 	reader, writer := io.Pipe()
 	go func() {
 		defer writer.Close()

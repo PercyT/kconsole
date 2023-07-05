@@ -27,22 +27,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestClusterCmd_Init(t *testing.T) {
+func TestConsoleCmd_Init(t *testing.T) {
 	// Create a mock BaseCommand
 	baseCmd := &BaseCommand{}
 
-	// Create a ClusterCmd with the mock BaseCommand
-	clusterCmd := &ClusterCmd{
+	// Create a ConsoleCmd with the mock BaseCommand
+	ConsoleCmd := &ConsoleCmd{
 		BaseCommand: *baseCmd,
 	}
 
-	// Call Init on the ClusterCmd
-	clusterCmd.Init()
+	// Call Init on the ConsoleCmd
+	ConsoleCmd.Init()
 
-	// Check that the ClusterCmd's command has the expected Use, Short, and Long fields
-	assert.Equal(t, "cluster", clusterCmd.command.Use)
-	assert.Equal(t, "Exec a command for a container incluster.", clusterCmd.command.Short)
-	assert.Equal(t, "Exec a command for a container incluster.", clusterCmd.command.Long)
-	assert.True(t, clusterCmd.command.DisableFlagsInUseLine)
-	assert.NotNil(t, clusterCmd.command.RunE)
+	// Check that the ConsoleCmd's command has the expected Use, Short, and Long fields
+	assert.Equal(t, "console", ConsoleCmd.command.Use)
+	assert.Equal(t, "Exec a command for a container incluster.", ConsoleCmd.command.Short)
+	assert.Equal(t, "Exec a command for a container incluster.", ConsoleCmd.command.Long)
+	assert.True(t, ConsoleCmd.command.DisableFlagsInUseLine)
+	assert.NotNil(t, ConsoleCmd.command.RunE)
 }
